@@ -12,6 +12,9 @@
 
 static int debug=0, nameserver_flag=0;
 
+// Function signature
+int construct_query(uint8_t* query, int max_query, char* hostname);
+
 void usage() 
 {
 	printf("Usage: hw2 [-d] -i domain/ip_address\n\t-d: debug\n");
@@ -28,7 +31,7 @@ char* findDNSServer(int x, char inputServers[x][20], int socket, char* hostname)
 	
 		// construct the query message
 		uint8_t query[1500];
-		int query_len=construct_query(query, 1500, hostname);
+		int query_len = construct_query(query, 1500, hostname);
 
 		struct sockaddr_in addr; 	// internet socket address data structure
 		addr.sin_family = AF_INET;
@@ -36,16 +39,38 @@ char* findDNSServer(int x, char inputServers[x][20], int socket, char* hostname)
 		addr.sin_addr.s_addr = nameserver_addr; // destination address (any local for now)
 	
 		int send_count = sendto(socket, query, query_len, 0, (struct sockaddr*)&addr,sizeof(addr));
-		if(send_count >= 0)
+		if(send_count < 0)
 		{
-			return inputServers[i];
+			continue;
 		}	
+
+		// Set timer for receive
+		struct timeval tv;
+
+		// 5 second timeout
+		tv.tv_sec = 5;
+		tv.tv_usec = 0;
+		setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, (char *) &tv, sizeof(struct timeval));
+
+		// await the response 
+		uint8_t answerbuf[1500];
+		int recv_count = recv(socket, answerbuf, 1500, 0);
+
+		printf("Checking if %s is a valid root server...\n\n", inputServers[i]);
+
+		if (recv_count > 0)
+		{
+			printf("Turns out %s is a valid root server!\n\n", inputServers[i]);
+			return inputServers[i];
+		}
+		
+		
 	}
-	printf("Error finding a valid DNS server from text file!");
-	exit(1);
+		printf("Error finding a valid DNS server from text file!");
+		exit(1);
 }
 
-int* findNameserver(char* hostname, char* nameserver, int sock)
+int* findNameServer(char* hostname, char* nameserver, int sock)
 {
 	in_addr_t nameserver_addr = inet_addr(nameserver);
 
@@ -115,6 +140,7 @@ int* findNameserver(char* hostname, char* nameserver, int sock)
 		// Answer field
 		if(htons(rr->type)==RECTYPE_A) 
 		{
+			printf("ADDITIONAL FIELD: ");
 			printf("The name %s resolves to IP addr: %s\n",
 						 string_name,
 						 inet_ntoa(*((struct in_addr *)answer_ptr)));
@@ -128,7 +154,7 @@ int* findNameserver(char* hostname, char* nameserver, int sock)
 			if(debug)
 			{
 				
-				printf("ANSWER FIELD: \n");
+				printf("AUTHORITATIVE FIELD: ");
 				printf("The name %s can be resolved by NS: %s\n",
 							 string_name, ns_string);
 			}
@@ -142,7 +168,7 @@ int* findNameserver(char* hostname, char* nameserver, int sock)
 			int ns_len=from_dns_style(answerbuf,answer_ptr,ns_string);
 			if(debug)
 			{
-				printf("CNAME FIELD: \n");
+				printf("CNAME FIELD: ");
 				printf("The name %s is also known as %s.\n",
 							 string_name, ns_string);
 			}
@@ -152,7 +178,7 @@ int* findNameserver(char* hostname, char* nameserver, int sock)
 		// PTR record
 		else if(htons(rr->type)==RECTYPE_PTR) 
 		{
-			printf("PTR FIELD: \n");
+			printf("PTR FIELD: ");
 			char ns_string[255];
 			int ns_len=from_dns_style(answerbuf,answer_ptr,ns_string);
 			printf("The host at %s is also known as %s.\n",
@@ -162,20 +188,20 @@ int* findNameserver(char* hostname, char* nameserver, int sock)
 		// SOA record
 		else if(htons(rr->type)==RECTYPE_SOA) 
 		{
-			printf("SOA FIELD: \n");
+			printf("SOA FIELD: ");
 			if(debug)
 				printf("Ignoring SOA record\n");
 		}
 		// AAAA record
 		else if(htons(rr->type)==RECTYPE_AAAA)  
 		{
-			printf("AAAA FIELD: \n");
+			printf("AAAA FIELD: ");
 			if(debug)
 				printf("Ignoring IPv6 record\n");
 		}
 		else 
 		{
-			printf("UNKNOWN FIELD: \n");
+			printf("UNKNOWN FIELD: ");
 			if(debug)
 				printf("got unknown record type %hu\n",htons(rr->type));
 		} 
@@ -323,11 +349,13 @@ int main(int argc, char** argv)
 
 	// Find valid DNS server from list
 	char *rootServer = findDNSServer(rootCount, rootServers, sock, hostname);
-	printf("Server from list that works: %s", rootServer);
 	in_addr_t nameserver_addr = inet_addr(rootServer);
 	
-	// No more recursion
-	
+
+	//int* findNameserver(char* hostname, char* nameserver, int sock)
+	findNameServer(hostname, rootServer, sock);
+
+	/*
 	// construct the query message
 	uint8_t query[1500];
 	int query_len=construct_query(query,1500,hostname);
@@ -458,4 +486,5 @@ int main(int argc, char** argv)
 
 	shutdown(sock,SHUT_RDWR);
 	close(sock);
+	*/
 }
