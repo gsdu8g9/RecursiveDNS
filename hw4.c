@@ -86,25 +86,6 @@ char* findDNSServer(int x, char inputServers[x][20], int socket, char* hostname)
 
 int* findNameServer(char* hostname, char* nameserver)
 {
-	/*
-	in_addr_t nameserver_addr = inet_addr(nameserver);
-
-	// construct the query message
-	uint8_t query[1500];
-	int query_len=construct_query(query, 1500, hostname);
-
-	struct sockaddr_in addr; 	// internet socket address data structure
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(53); // port 53 for DNS
-	addr.sin_addr.s_addr = nameserver_addr; // destination address (any local for now)
-	int send_count = sendto(sock, query, query_len, 0, (struct sockaddr*)&addr,sizeof(addr));
-	if(send_count < 0)
-	{
-		perror("Send failed");
-		exit(1); 
-	}	
-	*/
-
 	int sock_1;
 	struct sockaddr_in sockAddrInfo;
 
@@ -144,10 +125,10 @@ int* findNameServer(char* hostname, char* nameserver)
 	socklen_t addr_len;
 	struct sockaddr_in cliaddr;
 	int recv_bytes;
-	uint8_t answerbuf[1500];
+	uint8_t requestbuf[1500];
 
 	addr_len = sizeof(cliaddr);
-	if ((recv_bytes = recvfrom(sock_1, answerbuf, 1500, 0, (struct sockaddr *) &cliaddr, &addr_len)) == 0)
+	if ((recv_bytes = recvfrom(sock_1, requestbuf, 1500, 0, (struct sockaddr *) &cliaddr, &addr_len)) == 0)
 	{
 		printf("Error receiving!\n");
 		exit(1);
@@ -156,32 +137,68 @@ int* findNameServer(char* hostname, char* nameserver)
 	printf("Received data!\n");
 
 
-	printf("DNS Request: \n");
+	printf("\nDNS Request: \n");
 
 	printf("Port: %i\n", cliaddr.sin_port);
 	printf("IP Address: %s\n", inet_ntoa(cliaddr.sin_addr));
 
 
 	// Parse DNS request to get hostname
-	struct dns_hdr *ans_hdr = (struct dns_hdr*) answerbuf;
-	uint8_t *answer_ptr = answerbuf + sizeof(struct dns_hdr);
+	struct dns_hdr *quest_hdr = (struct dns_hdr*) requestbuf;
+	uint8_t *quest_ptr = requestbuf + sizeof(struct dns_hdr);
 	
-	int question_count = ntohs(ans_hdr->q_count);
+	int question_count_0 = ntohs(quest_hdr->q_count);
 
+	char dig_hostname;
 	int q;
-	for(q = 0; q < question_count; q++) 
+	for(q = 0; q < question_count_0; q++) 
 	{
-		char string_name[255];
-		memset(string_name, 0, 255);
-		int size = from_dns_style(answerbuf, answer_ptr, string_name);
+		char dig_hostname[255];
+		memset(dig_hostname, 0, 255);
+		int size = from_dns_style(requestbuf, quest_ptr, dig_hostname);
 
-		printf("Hostname: %s\n", string_name);
+		printf("Hostname: %s\n", dig_hostname);
 	}
 
+	////////////////////////////////////////////////////////////////////////////////////////
 
+	// Construct query to send to rootserver
+	uint8_t rootQuery[1500];
+	int rootQuery_len = construct_query(rootQuery, 1500, nameserver);
 
-	/*
-	 * // parse the response to get our answer
+	struct sockaddr_in response_addr;
+	in_addr_t rootserver_addr = inet_addr(nameserver);
+
+	response_addr.sin_family = cliaddr.sin_family;
+	response_addr.sin_port = cliaddr.sin_port;
+	response_addr.sin_addr.s_addr = rootserver_addr;
+
+	// Send DNS request to root server
+	int rootserver_send_count = sendto(sock_1, rootQuery, rootQuery_len, 0, (struct sockaddr *) &response_addr, sizeof(response_addr));
+	if (rootserver_send_count < 0)
+	{
+		printf("Sending dig DNS request to root server failed!\nExiting...\n");
+		exit(1);
+	}
+	
+	printf("\nDNS Response from rootserver: \n");
+
+	// TODO: HANGS HERE
+	// Await response from rootserver
+	uint8_t answerbuf[1500];
+	int response_count = recv(sock_1, answerbuf, 1500, 0);
+
+	if (response_count == 0)
+	{
+		printf("Received no data when sending DNS request to root server!\nExiting...\n");
+		exit(1);
+	}
+	else
+	{
+		printf("Received some data from root server!\n");
+	}
+
+	// parse the response to get our answer
 	struct dns_hdr *ans_hdr = (struct dns_hdr*) answerbuf;
 	uint8_t *answer_ptr = answerbuf + sizeof(struct dns_hdr);
 	
@@ -192,10 +209,9 @@ int* findNameServer(char* hostname, char* nameserver)
 	int other_count = ntohs(ans_hdr->other_count);
 
 
-	printf("DNS Request: \n");
 	// Print DNS request
-	int q;
-	for(q = 0; q < question_count; q++) 
+	int w;
+	for(w = 0; w < question_count; w++) 
 	{
 		char string_name[255];
 		memset(string_name, 0, 255);
@@ -203,7 +219,7 @@ int* findNameServer(char* hostname, char* nameserver)
 		answer_ptr += size;
 		answer_ptr += 4; //2 for type, 2 for class
 
-		printf("%s \n", htonl(answerbuf));
+		//printf("%s \n", htonl(answerbuf));
 	}
 
 	int a;
@@ -303,7 +319,6 @@ int* findNameServer(char* hostname, char* nameserver)
 	}
 
 	if(!got_answer) printf("Host %s not found.\n", hostname);
-	*/
 
 	shutdown(sock_1, SHUT_RDWR);
 	close(sock_1);
