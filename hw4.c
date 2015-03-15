@@ -180,8 +180,16 @@ int* findNameServer(char* hostname, char* nameserver)
 		printf("Sending dig DNS request to root server failed!\nExiting...\n");
 		exit(1);
 	}
+
+	// Set receive timeout
+	struct timeval tv;
+
+	// 10 second timeout
+	tv.tv_sec = 10;
+	tv.tv_usec = 0;
+	setsockopt(sock_1, SOL_SOCKET, SO_RCVTIMEO, (char *) &tv, sizeof(struct timeval));
 	
-	printf("\nDNS Response from rootserver: \n");
+	printf("\nWaiting for DNS Response from rootserver: \n");
 
 	// TODO: HANGS HERE
 	// Await response from rootserver
@@ -198,7 +206,7 @@ int* findNameServer(char* hostname, char* nameserver)
 		printf("Received some data from root server!\n");
 	}
 
-	// parse the response to get our answer
+	// Parse the DNS response we get from the root server
 	struct dns_hdr *ans_hdr = (struct dns_hdr*) answerbuf;
 	uint8_t *answer_ptr = answerbuf + sizeof(struct dns_hdr);
 	
@@ -209,7 +217,7 @@ int* findNameServer(char* hostname, char* nameserver)
 	int other_count = ntohs(ans_hdr->other_count);
 
 
-	// Print DNS request
+	// Skip questions
 	int w;
 	for(w = 0; w < question_count; w++) 
 	{
@@ -219,7 +227,7 @@ int* findNameServer(char* hostname, char* nameserver)
 		answer_ptr += size;
 		answer_ptr += 4; //2 for type, 2 for class
 
-		//printf("%s \n", htonl(answerbuf));
+		//printf("Hostname: %s \n", string_name);
 	}
 
 	int a;
