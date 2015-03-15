@@ -8,12 +8,16 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <signal.h>
+#include <netdb.h>
 #include "dns.h"
 
 static int debug=0, nameserver_flag=0;
 
 // Function signature
 int construct_query(uint8_t* query, int max_query, char* hostname);
+
+int PORT = 53;
 
 void usage() 
 {
@@ -34,6 +38,7 @@ char* findDNSServer(int x, char inputServers[x][20], int socket, char* hostname)
 		int query_len = construct_query(query, 1500, hostname);
 
 		struct sockaddr_in addr; 	// internet socket address data structure
+		//printf("Set up listening...\n");
 		addr.sin_family = AF_INET;
 		addr.sin_port = htons(53); // port 53 for DNS
 		addr.sin_addr.s_addr = nameserver_addr; // destination address (any local for now)
@@ -61,17 +66,27 @@ char* findDNSServer(int x, char inputServers[x][20], int socket, char* hostname)
 		if (recv_count > 0)
 		{
 			printf("Turns out %s is a valid root server!\n\n", inputServers[i]);
+
+			shutdown(socket,SHUT_RDWR);
+			close(socket);
+
+
 			return inputServers[i];
 		}
 		
 		
 	}
-		printf("Error finding a valid DNS server from text file!");
+		shutdown(socket,SHUT_RDWR);
+	close(socket);
+	
+	
+	printf("Error finding a valid DNS server from text file!");
 		exit(1);
 }
 
-int* findNameServer(char* hostname, char* nameserver, int sock)
+int* findNameServer(char* hostname, char* nameserver)
 {
+	/*
 	in_addr_t nameserver_addr = inet_addr(nameserver);
 
 	// construct the query message
@@ -88,13 +103,86 @@ int* findNameServer(char* hostname, char* nameserver, int sock)
 		perror("Send failed");
 		exit(1); 
 	}	
+	*/
 
-	// await the response 
+	int sock_1;
+	struct sockaddr_in sockAddrInfo;
+
+	sock_1 = socket(AF_INET, SOCK_DGRAM, 0);
+
+	if (sock_1 == 0)
+	{
+		printf("Error creating socket when waiting for a request...\nExiting...\n");
+		exit(1);
+	}
+
+	// Set listening socket's time out settings
+	/*struct timeval tv;
+
+	tv.tv_sec = 5;
+	tv.tv_usec = 0;
+	if (setsockopt(sock_1, SOL_SOCKET, SO_RCVTIMEO, (char *) &tv, sizeof(struct timeval)) == -1)
+	{
+		printf("Error creating timeout for listening socket!\nExiting...\n");
+		exit(1);
+	}*/
+
+	sockAddrInfo.sin_family = AF_INET;
+	sockAddrInfo.sin_addr.s_addr = INADDR_ANY;
+	sockAddrInfo.sin_port = htons(53);
+
+	int socketoptnum = 1;
+	setsockopt(sock_1, SOL_SOCKET, SO_REUSEADDR, &socketoptnum, sizeof(socketoptnum));
+
+	printf("Server waiting for connection...\n");
+	if (bind(sock_1, (struct sockaddr *) &sockAddrInfo, sizeof(sockAddrInfo)) < 0)
+	{
+		printf("There was a bind error!\nExiting...\n");
+		exit(1);
+	}
+
+	socklen_t addr_len;
+	struct sockaddr_in cliaddr;
+	int recv_bytes;
 	uint8_t answerbuf[1500];
-	int rec_count = recv(sock,answerbuf,1500,0);
+
+	addr_len = sizeof(cliaddr);
+	if ((recv_bytes = recvfrom(sock_1, answerbuf, 1500, 0, (struct sockaddr *) &cliaddr, &addr_len)) == 0)
+	{
+		printf("Error receiving!\n");
+		exit(1);
+	}
+
+	printf("Received data!\n");
+
+
+	printf("DNS Request: \n");
+
+	printf("Port: %i\n", cliaddr.sin_port);
+	printf("IP Address: %s\n", inet_ntoa(cliaddr.sin_addr));
+
+
+	// Parse DNS request to get hostname
+	struct dns_hdr *ans_hdr = (struct dns_hdr*) answerbuf;
+	uint8_t *answer_ptr = answerbuf + sizeof(struct dns_hdr);
 	
-	// parse the response to get our answer
-	struct dns_hdr *ans_hdr=(struct dns_hdr*)answerbuf;
+	int question_count = ntohs(ans_hdr->q_count);
+
+	int q;
+	for(q = 0; q < question_count; q++) 
+	{
+		char string_name[255];
+		memset(string_name, 0, 255);
+		int size = from_dns_style(answerbuf, answer_ptr, string_name);
+
+		printf("Hostname: %s\n", string_name);
+	}
+
+
+
+	/*
+	 * // parse the response to get our answer
+	struct dns_hdr *ans_hdr = (struct dns_hdr*) answerbuf;
 	uint8_t *answer_ptr = answerbuf + sizeof(struct dns_hdr);
 	
 	// now answer_ptr points at the first question. 
@@ -103,39 +191,44 @@ int* findNameServer(char* hostname, char* nameserver, int sock)
 	int auth_count = ntohs(ans_hdr->auth_count);
 	int other_count = ntohs(ans_hdr->other_count);
 
-	// skip past all questions
+
+	printf("DNS Request: \n");
+	// Print DNS request
 	int q;
-	for(q=0;q<question_count;q++) 
+	for(q = 0; q < question_count; q++) 
 	{
 		char string_name[255];
 		memset(string_name, 0, 255);
-		int size = from_dns_style(answerbuf,answer_ptr,string_name);
+		int size = from_dns_style(answerbuf, answer_ptr, string_name);
 		answer_ptr += size;
 		answer_ptr += 4; //2 for type, 2 for class
+
+		printf("%s \n", htonl(answerbuf));
 	}
 
 	int a;
 	int got_answer = 0;
 
+	// Parse and print DNS response
 	// now answer_ptr points at the first answer. loop through
 	// all answers in all sections
-	for(a=0;a<answer_count+auth_count+other_count;a++) 
+	for(a = 0; a < answer_count + auth_count + other_count; a++) 
 	{
 		// first the name this answer is referring to 
 		char string_name[255];
-		int dnsnamelen=from_dns_style(answerbuf,answer_ptr,string_name);
+		int dnsnamelen=from_dns_style(answerbuf, answer_ptr, string_name);
 		answer_ptr += dnsnamelen;
 
 		// then fixed part of the RR record
-		struct dns_rr* rr = (struct dns_rr*)answer_ptr;
-		answer_ptr+=sizeof(struct dns_rr);
+		struct dns_rr* rr = (struct dns_rr*) answer_ptr;
+		answer_ptr += sizeof(struct dns_rr);
 
-		const uint8_t RECTYPE_A=1;
-		const uint8_t RECTYPE_NS=2;
-		const uint8_t RECTYPE_CNAME=5;
-		const uint8_t RECTYPE_SOA=6;
-		const uint8_t RECTYPE_PTR=12;
-		const uint8_t RECTYPE_AAAA=28;
+		const uint8_t RECTYPE_A = 1;
+		const uint8_t RECTYPE_NS = 2;
+		const uint8_t RECTYPE_CNAME = 5;
+		const uint8_t RECTYPE_SOA = 6;
+		const uint8_t RECTYPE_PTR = 12;
+		const uint8_t RECTYPE_AAAA = 28;
 	
 		// Answer field
 		if(htons(rr->type)==RECTYPE_A) 
@@ -208,11 +301,12 @@ int* findNameServer(char* hostname, char* nameserver, int sock)
 
 		answer_ptr+=htons(rr->datalen);
 	}
-	
-	//if(!got_answer) printf("Host %s not found.\n",argv[2]);
 
-	shutdown(sock,SHUT_RDWR);
-	close(sock);
+	if(!got_answer) printf("Host %s not found.\n", hostname);
+	*/
+
+	shutdown(sock_1, SHUT_RDWR);
+	close(sock_1);
 
 }
 
@@ -353,138 +447,5 @@ int main(int argc, char** argv)
 	
 
 	//int* findNameserver(char* hostname, char* nameserver, int sock)
-	findNameServer(hostname, rootServer, sock);
-
-	/*
-	// construct the query message
-	uint8_t query[1500];
-	int query_len=construct_query(query,1500,hostname);
-
-	struct sockaddr_in addr; 	// internet socket address data structure
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(53); // port 53 for DNS
-	addr.sin_addr.s_addr = nameserver_addr; // destination address (any local for now)
-	int send_count = sendto(sock, query, query_len, 0, (struct sockaddr*)&addr,sizeof(addr));
-	if(send_count < 0)
-	{
-		perror("Send failed");
-		exit(1); 
-	}	
-
-	// await the response 
-	uint8_t answerbuf[1500];
-	int rec_count = recv(sock,answerbuf,1500,0);
-	
-	// parse the response to get our answer
-	struct dns_hdr *ans_hdr=(struct dns_hdr*)answerbuf;
-	uint8_t *answer_ptr = answerbuf + sizeof(struct dns_hdr);
-	
-	// now answer_ptr points at the first question. 
-	int question_count = ntohs(ans_hdr->q_count);
-	int answer_count = ntohs(ans_hdr->a_count);
-	int auth_count = ntohs(ans_hdr->auth_count);
-	int other_count = ntohs(ans_hdr->other_count);
-
-	// skip past all questions
-	int q;
-	for(q=0;q<question_count;q++) 
-	{
-		char string_name[255];
-		memset(string_name, 0, 255);
-		int size = from_dns_style(answerbuf,answer_ptr,string_name);
-		answer_ptr += size;
-		answer_ptr += 4; //2 for type, 2 for class
-	}
-
-	int a;
-	int got_answer = 0;
-
-	// now answer_ptr points at the first answer. loop through
-	// all answers in all sections
-	for(a=0;a<answer_count+auth_count+other_count;a++) 
-	{
-		// first the name this answer is referring to 
-		char string_name[255];
-		int dnsnamelen=from_dns_style(answerbuf,answer_ptr,string_name);
-		answer_ptr += dnsnamelen;
-
-		// then fixed part of the RR record
-		struct dns_rr* rr = (struct dns_rr*)answer_ptr;
-		answer_ptr+=sizeof(struct dns_rr);
-
-		const uint8_t RECTYPE_A=1;
-		const uint8_t RECTYPE_NS=2;
-		const uint8_t RECTYPE_CNAME=5;
-		const uint8_t RECTYPE_SOA=6;
-		const uint8_t RECTYPE_PTR=12;
-		const uint8_t RECTYPE_AAAA=28;
-
-		if(htons(rr->type)==RECTYPE_A) 
-		{
-			printf("The name %s resolves to IP addr: %s\n",
-						 string_name,
-						 inet_ntoa(*((struct in_addr *)answer_ptr)));
-			got_answer=1;
-		}
-		// NS record
-		else if(htons(rr->type)==RECTYPE_NS) 
-		{
-			char ns_string[255];
-			int ns_len=from_dns_style(answerbuf,answer_ptr,ns_string);
-			if(debug)
-			{
-				printf("The name %s can be resolved by NS: %s\n",
-							 string_name, ns_string);
-			}
-					
-			got_answer=1;
-		}
-		// CNAME record
-		else if(htons(rr->type)==RECTYPE_CNAME) 
-		{
-			char ns_string[255];
-			int ns_len=from_dns_style(answerbuf,answer_ptr,ns_string);
-			if(debug)
-			{
-				printf("The name %s is also known as %s.\n",
-							 string_name, ns_string);
-			}
-								
-			got_answer=1;
-		}
-		// PTR record
-		else if(htons(rr->type)==RECTYPE_PTR) 
-		{
-			char ns_string[255];
-			int ns_len=from_dns_style(answerbuf,answer_ptr,ns_string);
-			printf("The host at %s is also known as %s.\n",
-						 string_name, ns_string);								
-			got_answer=1;
-		}
-		// SOA record
-		else if(htons(rr->type)==RECTYPE_SOA) 
-		{
-			if(debug)
-				printf("Ignoring SOA record\n");
-		}
-		// AAAA record
-		else if(htons(rr->type)==RECTYPE_AAAA)  
-		{
-			if(debug)
-				printf("Ignoring IPv6 record\n");
-		}
-		else 
-		{
-			if(debug)
-				printf("got unknown record type %hu\n",htons(rr->type));
-		} 
-
-		answer_ptr+=htons(rr->datalen);
-	}
-	
-	if(!got_answer) printf("Host %s not found.\n",argv[2]);
-
-	shutdown(sock,SHUT_RDWR);
-	close(sock);
-	*/
+	findNameServer(hostname, rootServer);
 }
