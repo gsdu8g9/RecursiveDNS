@@ -234,12 +234,14 @@ int* findNameServer(char* hostname, char* nameserver)
 		int size = from_dns_style(answerbuf, answer_ptr, string_name);
 		answer_ptr += size;
 		answer_ptr += 4; //2 for type, 2 for class
-
-		//printf("Hostname: %s \n", string_name);
 	}
 
 	int a;
 	int got_answer = 0;
+	int finished = 0;
+	int checkHostname = 0;
+	int checkAddress = 0;
+	char *hostnameServer;
 
 	// Parse and print DNS response
 	// now answer_ptr points at the first answer. loop through
@@ -262,17 +264,7 @@ int* findNameServer(char* hostname, char* nameserver)
 		const uint8_t RECTYPE_PTR = 12;
 		const uint8_t RECTYPE_AAAA = 28;
 	
-		// Answer field
-		if(htons(rr->type)==RECTYPE_A) 
-		{
-			printf("ADDITIONAL FIELD: ");
-			printf("The name %s resolves to IP addr: %s\n",
-						 string_name,
-						 inet_ntoa(*((struct in_addr *)answer_ptr)));
-			got_answer=1;
-		}
-		// NS record
-		else if(htons(rr->type)==RECTYPE_NS) 
+		if(htons(rr->type)==RECTYPE_NS) 
 		{
 			char ns_string[255];
 			int ns_len=from_dns_style(answerbuf,answer_ptr,ns_string);
@@ -282,6 +274,22 @@ int* findNameServer(char* hostname, char* nameserver)
 							 string_name, ns_string);
 					
 			got_answer=1;
+
+			if (strcmp(hostname, string_name) == 0)
+			{
+				hostnameServer = ns_string;
+				checkHostname = 1;
+			}
+		}
+		// Answer field
+		else if(htons(rr->type)==RECTYPE_A) 
+		{
+			printf("(ANSWER?)ADDITIONAL FIELD: ");
+			printf("The name %s resolves to IP addr: %s\n",
+						 string_name,
+						 inet_ntoa(*((struct in_addr *)answer_ptr)));
+			got_answer=1;
+
 		}
 		// CNAME record
 		else if(htons(rr->type)==RECTYPE_CNAME) 
@@ -327,9 +335,21 @@ int* findNameServer(char* hostname, char* nameserver)
 
 	if(!got_answer) printf("Host %s not found.\n", hostname);
 
+	// TODO: Figure out how to send response back to dig
+	struct sockaddr_in finalsockaddr_in;
+	finalsockaddr_in.sin_family = AF_INET;
+	finalsockaddr_in.sin_port = cliaddr.sin_port;
+	finalsockaddr_in.sin_addr = cliaddr.sin_addr;
+	
+	int final_send_count = sendto(sock_2, answerbuf, 1500, 0, (struct sockaddr *) &finalsockaddr_in, sizeof(finalsockaddr_in));
+	if (final_send_count < 0)
+	{
+		printf("Failed to send back to dig!\n");
+	}
+
+
 	shutdown(sock_2, SHUT_RDWR);
 	close(sock_2);
-
 }
 
 /* constructs a DNS query message for the provided hostname */
