@@ -70,13 +70,10 @@ char* findDNSServer(int x, char inputServers[x][20], int socket, char* hostname)
 			shutdown(socket,SHUT_RDWR);
 			close(socket);
 
-
 			return inputServers[i];
 		}
-		
-		
 	}
-		shutdown(socket,SHUT_RDWR);
+	shutdown(socket,SHUT_RDWR);
 	close(socket);
 	
 	
@@ -86,27 +83,19 @@ char* findDNSServer(int x, char inputServers[x][20], int socket, char* hostname)
 
 int* findNameServer(char* hostname, char* nameserver)
 {
+	/////////////////////////////////////////////////////////////
+	// Create socket that will wait and listen for a dig request
+	/////////////////////////////////////////////////////////////
+	
 	int sock_1;
 	struct sockaddr_in sockAddrInfo;
 
 	sock_1 = socket(AF_INET, SOCK_DGRAM, 0);
-
-	if (sock_1 == 0)
+	if (sock_1 < 0)
 	{
 		printf("Error creating socket when waiting for a request...\nExiting...\n");
 		exit(1);
 	}
-
-	// Set listening socket's time out settings
-	/*struct timeval tv;
-
-	tv.tv_sec = 5;
-	tv.tv_usec = 0;
-	if (setsockopt(sock_1, SOL_SOCKET, SO_RCVTIMEO, (char *) &tv, sizeof(struct timeval)) == -1)
-	{
-		printf("Error creating timeout for listening socket!\nExiting...\n");
-		exit(1);
-	}*/
 
 	sockAddrInfo.sin_family = AF_INET;
 	sockAddrInfo.sin_addr.s_addr = INADDR_ANY;
@@ -137,9 +126,9 @@ int* findNameServer(char* hostname, char* nameserver)
 	printf("Received data!\n");
 
 
-	printf("\nDNS Request: \n");
+	printf("\nDNS Request received from dig: \n");
 
-	printf("Port: %i\n", cliaddr.sin_port);
+	printf("Port: %i\n", ntohs(cliaddr.sin_port));
 	printf("IP Address: %s\n", inet_ntoa(cliaddr.sin_addr));
 
 
@@ -149,7 +138,7 @@ int* findNameServer(char* hostname, char* nameserver)
 	
 	int question_count_0 = ntohs(quest_hdr->q_count);
 
-	char dig_hostname;
+	char *dig_hostname;
 	int q;
 	for(q = 0; q < question_count_0; q++) 
 	{
@@ -157,53 +146,72 @@ int* findNameServer(char* hostname, char* nameserver)
 		memset(dig_hostname, 0, 255);
 		int size = from_dns_style(requestbuf, quest_ptr, dig_hostname);
 
-		printf("Hostname: %s\n", dig_hostname);
+		printf("Hostname: %s\n\n", hostname);
+
 	}
 
-	////////////////////////////////////////////////////////////////////////////////////////
+	/////////////////////////////////////////////////////////////////////////
+	// Send received DNS request from dig to rootserver
+	/////////////////////////////////////////////////////////////////////////
 
+	int sock_2 = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sock_2 < 0)
+	{
+		printf("Error creating socket_2 that sends/receives data from rootserver\nExiting...\n");
+		exit(1);
+	}
+
+	
 	// Construct query to send to rootserver
 	uint8_t rootQuery[1500];
-	int rootQuery_len = construct_query(rootQuery, 1500, nameserver);
+	int rootQuery_len = construct_query(rootQuery, 1500, hostname);
 
 	struct sockaddr_in response_addr;
 	in_addr_t rootserver_addr = inet_addr(nameserver);
 
-	response_addr.sin_family = cliaddr.sin_family;
-	response_addr.sin_port = cliaddr.sin_port;
+	response_addr.sin_family = AF_INET;
+	response_addr.sin_port = htons(53);
 	response_addr.sin_addr.s_addr = rootserver_addr;
 
+	printf("Sending request to root server with folling information: \n");
+	printf("Sending to port: %i\n", ntohs(response_addr.sin_port));
+	printf("Sending to IP Address: %s\n\n", inet_ntoa(response_addr.sin_addr));
+
+	printf("Attempting to send query to root server...\n");
 	// Send DNS request to root server
-	int rootserver_send_count = sendto(sock_1, rootQuery, rootQuery_len, 0, (struct sockaddr *) &response_addr, sizeof(response_addr));
+	int rootserver_send_count = sendto(sock_2, rootQuery, rootQuery_len, 0, (struct sockaddr *) &response_addr, sizeof(response_addr));
 	if (rootserver_send_count < 0)
 	{
 		printf("Sending dig DNS request to root server failed!\nExiting...\n");
 		exit(1);
 	}
+	printf("Sent DNS request to rootserver!\n");
 
 	// Set receive timeout
 	struct timeval tv;
 
 	// 10 second timeout
-	tv.tv_sec = 10;
+	tv.tv_sec = 5;
 	tv.tv_usec = 0;
-	setsockopt(sock_1, SOL_SOCKET, SO_RCVTIMEO, (char *) &tv, sizeof(struct timeval));
+	setsockopt(sock_2, SOL_SOCKET, SO_RCVTIMEO, (char *) &tv, sizeof(struct timeval));
 	
-	printf("\nWaiting for DNS Response from rootserver: \n");
+	printf("\nWaiting for DNS response from rootserver: \n");
 
-	// TODO: HANGS HERE
 	// Await response from rootserver
 	uint8_t answerbuf[1500];
-	int response_count = recv(sock_1, answerbuf, 1500, 0);
+	struct sockaddr_in serveraddr;
+	socklen_t serveraddr_len;
+	serveraddr_len = sizeof(serveraddr);
 
-	if (response_count == 0)
+	int response_count = recv(sock_2, answerbuf, 1500, 0);
+	if (response_count < 0)
 	{
-		printf("Received no data when sending DNS request to root server!\nExiting...\n");
+		printf("Error(or timeout) from receiving data from root server!\nExiting...\n");
 		exit(1);
 	}
 	else
 	{
-		printf("Received some data from root server!\n");
+		printf("Received some data from root server!: %i\n", response_count);
 	}
 
 	// Parse the DNS response we get from the root server
@@ -268,13 +276,10 @@ int* findNameServer(char* hostname, char* nameserver)
 		{
 			char ns_string[255];
 			int ns_len=from_dns_style(answerbuf,answer_ptr,ns_string);
-			if(debug)
-			{
 				
 				printf("AUTHORITATIVE FIELD: ");
 				printf("The name %s can be resolved by NS: %s\n",
 							 string_name, ns_string);
-			}
 					
 			got_answer=1;
 		}
@@ -283,12 +288,9 @@ int* findNameServer(char* hostname, char* nameserver)
 		{
 			char ns_string[255];
 			int ns_len=from_dns_style(answerbuf,answer_ptr,ns_string);
-			if(debug)
-			{
 				printf("CNAME FIELD: ");
 				printf("The name %s is also known as %s.\n",
 							 string_name, ns_string);
-			}
 								
 			got_answer=1;
 		}
@@ -306,30 +308,27 @@ int* findNameServer(char* hostname, char* nameserver)
 		else if(htons(rr->type)==RECTYPE_SOA) 
 		{
 			printf("SOA FIELD: ");
-			if(debug)
 				printf("Ignoring SOA record\n");
 		}
 		// AAAA record
 		else if(htons(rr->type)==RECTYPE_AAAA)  
 		{
 			printf("AAAA FIELD: ");
-			if(debug)
 				printf("Ignoring IPv6 record\n");
 		}
 		else 
 		{
 			printf("UNKNOWN FIELD: ");
-			if(debug)
 				printf("got unknown record type %hu\n",htons(rr->type));
 		} 
 
-		answer_ptr+=htons(rr->datalen);
+		answer_ptr += htons(rr->datalen);
 	}
 
 	if(!got_answer) printf("Host %s not found.\n", hostname);
 
-	shutdown(sock_1, SHUT_RDWR);
-	close(sock_1);
+	shutdown(sock_2, SHUT_RDWR);
+	close(sock_2);
 
 }
 
@@ -468,6 +467,7 @@ int main(int argc, char** argv)
 	char *rootServer = findDNSServer(rootCount, rootServers, sock, hostname);
 	in_addr_t nameserver_addr = inet_addr(rootServer);
 	
+	printf("Using address: %s", rootServer);
 
 	//int* findNameserver(char* hostname, char* nameserver, int sock)
 	findNameServer(hostname, rootServer);
